@@ -16,6 +16,16 @@ from .base import RunResult, Sandbox
 MAX_OUTPUT_BYTES = 256 * 1024
 
 
+def _guest_env(workdir: str) -> dict:
+    env = {"HOME": workdir, "TERM": "", "TMPDIR": workdir}
+    if os.name == "nt":
+        env["PATH"] = os.environ.get("PATH", "")
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    else:
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+    return env
+
+
 class LocalSandbox(Sandbox):
     def __init__(self, workdir: str | None = None):
         self._workdir = workdir or tempfile.mkdtemp(prefix="agentrush-")
@@ -34,8 +44,11 @@ class LocalSandbox(Sandbox):
             proc = subprocess.Popen(
                 command, cwd=self._workdir,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", ""),
-                     "HOME": self._workdir, "TERM": "", "TMPDIR": self._workdir},
+                # Guests get a scrubbed environment. POSIX gets a static
+                # minimal PATH so `env` shows no host paths; Windows needs
+                # the host PATH (and SYSTEMROOT) just to launch a process —
+                # dev only, the real boundary is DockerSandbox.
+                env=_guest_env(self._workdir),
                 text=True, errors="replace")
             try:
                 out, err = proc.communicate(timeout=timeout)

@@ -7,21 +7,60 @@ the sandbox via stdin/file, never executed. The containment demo relies on
 this boundary staying strict.
 """
 import hashlib
+import ipaddress
 import json
+import socket
 import time
+import urllib.parse
 import urllib.request
 
 from sandbox.base import make_sandbox
 
 UA = {"User-Agent": "agentrush/0.1 (+verifiable-execution agent)"}
 MAX_FETCH = 512 * 1024
+_REDIRECT_LIMIT = 5
+
+
+def _public_host(host: str) -> bool:
+    """Every resolved address must be globally routable — else the planner
+    could aim the fetch at cloud metadata, loopback or LAN services."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    return bool(infos) and all(
+        ipaddress.ip_address(i[4][0]).is_global for i in infos)
+
+
+def _validate_url(url: str) -> None:
+    u = urllib.parse.urlsplit(url)
+    if u.scheme not in ("http", "https"):
+        raise ValueError("fetch scheme must be http or https")
+    if u.username or u.password:
+        raise ValueError("credentials in fetch URLs are refused")
+    if not u.hostname or not _public_host(u.hostname):
+        raise ValueError(f"refusing non-public host {u.hostname!r}")
+
+
+class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    """Re-validate every hop — a redirect to a private address is refused."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_CheckedRedirect())
 
 
 def host_fetch(url: str, timeout: float = 15.0) -> dict:
-    """Fetch on the ORCHESTRATOR side; the sandbox itself has no network."""
+    """Fetch on the ORCHESTRATOR side; the sandbox itself has no network.
+    URLs come from the LLM plan (untrusted) — scheme, host and every
+    redirect hop are checked so the fetch can't be turned inward (SSRF)."""
     try:
+        _validate_url(url)
         req = urllib.request.Request(url, headers=UA)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _opener.open(req, timeout=timeout) as r:
             body = r.read(MAX_FETCH)
         return {"ok": True, "status": r.status, "url": url,
                 "bytes": len(body), "text": body.decode("utf-8", "replace"),

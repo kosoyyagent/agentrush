@@ -9,6 +9,7 @@ Every task gets a throwaway container:
 - empty env                 secrets never enter the container
 """
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -17,6 +18,18 @@ from .base import RunResult, Sandbox
 
 IMAGE = "python:3.12-slim"
 MAX_OUTPUT_BYTES = 256 * 1024
+
+# Workdir file names come from the plan/fetched data — they are interpolated
+# into a shell line inside the container, so anything but a plain relative
+# path is refused before it can quote out or traverse up.
+_SAFE_REL = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_./-]*$")
+
+
+def _check_rel(rel: str) -> str:
+    if (not _SAFE_REL.fullmatch(rel) or rel.startswith("/")
+            or ".." in rel.split("/")):
+        raise ValueError(f"unsafe sandbox-relative path: {rel!r}")
+    return rel
 
 
 def docker_available() -> bool:
@@ -44,11 +57,14 @@ class DockerSandbox(Sandbox):
         name = f"agentrush-{int(time.time()*1000)}"
         cmd = [
             "docker", "run", "-d", "--name", name,
+            "--init",
             "--network", "none",
             "--memory", f"{self.mem_mb}m",
             "--cpus", str(self.cpus),
             "--pids-limit", str(self.pids),
             "--read-only",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
             "--tmpfs", "/work:rw,noexec,nosuid,size=64m",
             "--env", "HOME=/work",
             "-w", "/work",
@@ -67,16 +83,25 @@ class DockerSandbox(Sandbox):
             return RunResult(False, "", e.stderr.decode()[:500], None, 0.0,
                              False, "container spawn failed")
         for rel, content in (workdir_files or {}).items():
+            rel = _check_rel(rel)
             b64 = __import__("base64").b64encode(content.encode()).decode()
             self._exec(["sh", "-c", f"mkdir -p /work/'$(dirname {rel})' && "
                                     f"echo {b64} | base64 -d > /work/{rel}"])
         t0 = time.monotonic()
         try:
-            r = self._exec(command, timeout=timeout)
-            return RunResult(r.returncode == 0,
+            # `timeout` inside the container kills the guest process itself;
+            # without it a timed-out docker exec leaves the command running.
+            inner = ["timeout", "-s", "KILL", str(int(timeout))] + command
+            r = self._exec(inner, timeout=timeout + 10)
+            # 124 = timeout's own deadline, 137 = the KILL it sent landed;
+            # either way the guest was stopped by us, not by itself.
+            dead = r.returncode in (124, 137)
+            return RunResult(not dead and r.returncode == 0,
                              r.stdout[:MAX_OUTPUT_BYTES],
                              r.stderr[:MAX_OUTPUT_BYTES],
-                             r.returncode, round(time.monotonic() - t0, 3))
+                             r.returncode, round(time.monotonic() - t0, 3),
+                             killed=dead,
+                             reason=f"timeout after {timeout}s" if dead else "")
         except subprocess.TimeoutExpired:
             return RunResult(False, "", "", None,
                              round(time.monotonic() - t0, 3),
