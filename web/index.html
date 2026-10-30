@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentRush — sandboxed execution agent</title>
+<style>
+  :root{color-scheme:dark}
+  body{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#ddd;background:#111}
+  textarea{width:100%;box-sizing:border-box;background:#1b1b1b;color:#ddd;border:1px solid #333;border-radius:8px;padding:10px;font:inherit}
+  button{background:#3a6df0;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;cursor:pointer;margin-top:8px}
+  pre{background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:12px;overflow:auto;font-size:13px}
+  .step{border-left:3px solid #3a6df0;padding-left:10px;margin:12px 0}
+  .killed{border-left-color:#e05555}
+  .tag{display:inline-block;background:#222;border:1px solid #333;border-radius:6px;padding:1px 7px;font-size:12px;margin-right:6px}
+</style>
+</head>
+<body>
+<h1>AgentRush</h1>
+<p>Web agent that performs real work — every action inside a throwaway
+sandbox. Empty env, resource caps, no network from guest code, destroyed
+after the task. The run record below is the verifiable receipt.</p>
+<textarea id="task" rows="3" placeholder="Describe the work, e.g. 'Fetch https://example.com and count how many times the word example appears'"></textarea>
+<button id="go">Run in sandbox</button>
+<div id="out"></div>
+<script>
+const out=document.getElementById('out');
+document.getElementById('go').onclick=async()=>{
+  const task=document.getElementById('task').value.trim();
+  if(!task)return;
+  out.innerHTML='<p>queued…</p>';
+  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task})});
+  const {job,poll}=await r.json();
+  const t=setInterval(async()=>{
+    const rr=await fetch(poll); const d=await rr.json();
+    if(d.state==='running'||d.state===undefined){out.innerHTML='<p>running…</p>';return;}
+    clearInterval(t);
+    if(d.state==='error'||!d.record){out.innerHTML='<pre>'+JSON.stringify(d,null,1)+'</pre>';return;}
+    render(d.record);
+  },1500);
+};
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function render(rec){
+  let h=`<p><span class="tag">sandbox: ${esc(rec.sandbox)}</span><span class="tag">destroyed: ${rec.sandbox_destroyed}</span><span class="tag">record ${esc((rec.record_sha256||'').slice(0,12))}…</span></p>`;
+  for(const s of rec.steps||[]){
+    const r=s.result||{};
+    h+=`<div class="step ${r.killed?'killed':''}"><b>step ${esc(s.step)} · ${esc(s.action)}</b> — ${esc(s.why||'')}<br>`;
+    if(s.action==='fetch')h+=`<span class="tag">${r.ok?'fetched':'failed'}</span> status ${esc(r.status??'-')} · ${r.bytes??0} bytes`;
+    else h+=`<span class="tag">${r.killed?'KILLED: '+esc(r.reason):'exit '+r.exit_code}</span> ${r.wall_sec}s<pre>${esc(r.stdout||'')}${r.stderr?'\n--- stderr ---\n'+esc(r.stderr):''}</pre>`;
+    h+='</div>';
+  }
+  out.innerHTML=h;
+}
+</script>
+</body>
+</html>
