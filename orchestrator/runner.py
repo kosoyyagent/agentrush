@@ -81,7 +81,8 @@ def run_task(task: str, llm, sandbox_kind: str = "auto",
     sb = make_sandbox(sandbox_kind)
     record["sandbox"] = sb.name()
     try:
-        steps = llm.plan(task)[:MAX_STEPS]
+        steps = [s for s in llm.plan(task)
+                 if isinstance(s, dict)][:MAX_STEPS]
         deadline = time.monotonic() + RUN_DEADLINE_SEC
         fetched: dict[str, dict] = {}
         for s in steps:

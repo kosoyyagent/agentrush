@@ -6,6 +6,7 @@ from env on the orchestrator host only (never inside the sandbox).
 """
 import json
 import os
+import re
 import urllib.request
 
 DEFAULT_BASE = "https://api.vultrinference.com/v1"
@@ -36,7 +37,13 @@ class LLM:
         return data["choices"][0]["message"]["content"]
 
     def plan(self, task: str) -> list[dict]:
-        """Turn a user task into ordered execution steps (JSON)."""
+        """Turn a user task into ordered execution steps (JSON).
+
+        With no API key configured we fall back to a deterministic local
+        planner — the demo must not depend on an external model being
+        reachable. Steps still run inside the same sandbox boundary."""
+        if not self.api_key:
+            return _local_plan(task)
         out = self.chat([
             {"role": "system", "content": (
                 "You are the planning layer of a sandboxed execution agent. "
@@ -59,3 +66,25 @@ class LLM:
         except ValueError:
             return [{"step": 1, "action": "python",
                      "command": f"print({out[:500]!r})", "why": "raw reply"}]
+
+
+def _local_plan(task: str) -> list[dict]:
+    """Deterministic planner for demos / keyless dev — no external calls."""
+    steps = []
+    for url in re.findall(r"https?://[^\s'\"]+", task)[:3]:
+        steps.append({"step": len(steps) + 1, "action": "fetch",
+                      "command": url, "why": "fetch referenced page"})
+    steps.append({
+        "step": len(steps) + 1, "action": "python",
+        "command": (
+            "import glob, os\n"
+            "pages = sorted(glob.glob('/work/page_*.txt') or "
+            "glob.glob('page_*.txt'))\n"
+            "print('task:', " + repr(task[:200]) + ")\n"
+            "for p in pages:\n"
+            "    text = open(p, encoding='utf-8', errors='replace').read()\n"
+            "    print(p, len(text), 'bytes |', text[:200].strip())\n"
+            "if not pages:\n"
+            "    print('no fetched pages; nothing to analyse')"),
+        "why": "inspect fetched pages inside the sandbox"})
+    return steps
