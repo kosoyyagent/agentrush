@@ -20,14 +20,17 @@ from orchestrator.runner import run_task
 from sandbox.base import make_sandbox
 
 WEB = Path(__file__).resolve().parents[1] / "web" / "index.html"
-_jobs: queue.Queue = queue.Queue()
+_jobs: queue.Queue = queue.Queue(maxsize=32)
 _results: dict[str, dict] = {}
+_MAX_RESULTS = 200      # bounded: results expire FIFO once full
 _llm = LLM()
 
 
 def _worker():
     while True:
         jid, task, kind = _jobs.get()
+        while len(_results) >= _MAX_RESULTS:
+            _results.pop(next(iter(_results)), None)
         try:
             _results[jid] = {"state": "running"}
             _results[jid] = {"state": "done",
@@ -74,7 +77,11 @@ class H(BaseHTTPRequestHandler):
             return self._send(400, json.dumps({"error": "empty task"}))
         jid = os.urandom(8).hex()
         kind = body.get("sandbox", "auto")
-        _jobs.put((jid, task, kind))
+        try:
+            _jobs.put_nowait((jid, task, kind))
+        except queue.Full:
+            return self._send(503, json.dumps(
+                {"error": "queue full, retry shortly"}))
         self._send(202, json.dumps({"job": jid, "poll": f"/api/result/{jid}"}))
 
     def log_message(self, *a):

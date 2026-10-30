@@ -30,6 +30,9 @@ Containment properties (the judging focus):
   link-local and RFC1918 targets are refused at every redirect hop
 - **empty environment** — API keys live only on the orchestrator host
 - **hard caps** — wall-time kill, memory/CPU/pids limits
+- **resource bounds on the orchestrator too** — plan truncated at 20
+  steps, 8 fetches, 5-minute run deadline; the job queue (32) and the
+  result store (200, FIFO eviction) can't grow without bound
 - **lifecycle discipline** — container created per task, `docker rm -f`
   after; the run record states `sandbox_destroyed: true`
 - **verifiable output** — every run returns a JSON record with per-step

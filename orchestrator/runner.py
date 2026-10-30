@@ -69,6 +69,11 @@ def host_fetch(url: str, timeout: float = 15.0) -> dict:
         return {"ok": False, "url": url, "error": str(e)[:300]}
 
 
+MAX_STEPS = 20          # the planner is untrusted — no unbounded loops
+MAX_FETCHES = 8
+RUN_DEADLINE_SEC = 300  # whole-run wall clock, on top of per-step timeouts
+
+
 def run_task(task: str, llm, sandbox_kind: str = "auto",
              step_timeout: float = 30.0) -> dict:
     record = {"task": task, "sandbox": None, "steps": [],
@@ -76,15 +81,29 @@ def run_task(task: str, llm, sandbox_kind: str = "auto",
     sb = make_sandbox(sandbox_kind)
     record["sandbox"] = sb.name()
     try:
-        steps = llm.plan(task)
+        steps = llm.plan(task)[:MAX_STEPS]
+        deadline = time.monotonic() + RUN_DEADLINE_SEC
         fetched: dict[str, dict] = {}
         for s in steps:
+            if time.monotonic() > deadline:
+                record["steps"].append(
+                    {"step": s.get("step"), "action": s.get("action"),
+                     "result": {"ok": False,
+                                "error": "run deadline exceeded"}})
+                break
             action = s.get("action", "python")
             entry = {"step": s.get("step"), "action": action,
                      "why": s.get("why", "")}
             if action == "fetch":
-                res = host_fetch(s.get("command", ""))
-                fetched[res["url"]] = res
+                if len(fetched) >= MAX_FETCHES:
+                    res = {"ok": False, "url": s.get("command", ""),
+                           "error": "fetch budget exceeded"}
+                else:
+                    res = host_fetch(s.get("command", ""))
+                if res.get("ok"):
+                    fetched[res["url"]] = res
+                else:
+                    fetched.setdefault(res["url"], res)
                 entry["result"] = {k: res[k] for k in
                                    ("ok", "status", "bytes", "sha256", "error")
                                    if k in res}
