@@ -85,6 +85,7 @@ def run_task(task: str, llm, sandbox_kind: str = "auto",
                  if isinstance(s, dict)][:MAX_STEPS]
         deadline = time.monotonic() + RUN_DEADLINE_SEC
         fetched: dict[str, dict] = {}
+        fetch_calls = 0  # the budget counts calls, not distinct URLs
         for s in steps:
             if time.monotonic() > deadline:
                 record["steps"].append(
@@ -96,10 +97,11 @@ def run_task(task: str, llm, sandbox_kind: str = "auto",
             entry = {"step": s.get("step"), "action": action,
                      "why": s.get("why", "")}
             if action == "fetch":
-                if len(fetched) >= MAX_FETCHES:
+                if fetch_calls >= MAX_FETCHES:
                     res = {"ok": False, "url": s.get("command", ""),
                            "error": "fetch budget exceeded"}
                 else:
+                    fetch_calls += 1
                     res = host_fetch(s.get("command", ""))
                 if res.get("ok"):
                     fetched[res["url"]] = res

@@ -31,8 +31,10 @@ Containment properties (the judging focus):
 - **empty environment** — API keys live only on the orchestrator host
 - **hard caps** — wall-time kill, memory/CPU/pids limits
 - **resource bounds on the orchestrator too** — plan truncated at 20
-  steps, 8 fetches, 5-minute run deadline; the job queue (32) and the
-  result store (200, FIFO eviction) can't grow without bound
+  steps, 8 fetch *calls* (counted per call, not per distinct URL, so
+  re-requesting one URL can't stall under the cap), 5-minute run
+  deadline; the job queue (32) and the result store (200, FIFO
+  eviction) can't grow without bound
 - **lifecycle discipline** — container created per task, `docker rm -f`
   after; the run record states `sandbox_destroyed: true`
 - **verifiable output** — every run returns a JSON record with per-step
@@ -78,3 +80,17 @@ curl -X POST localhost:8080/api/run -d "{\"task\":\"compute sum 1..100\"}"
 ```
 
 Production (`sandbox=docker`) is identical — the factory auto-detects.
+
+## Tests
+
+```
+python -m unittest tests.test_runner -v
+```
+
+13 tests covering URL validation (SSRF refusal incl. every redirect-hop
+rule's input), plan/fetch/run budgets, fetch-to-guest data flow,
+sandbox lifecycle and the verifiable run record. The suite is how the
+per-URL-vs-per-call fetch-budget bug was caught: the cap used to count
+distinct URLs, so repeats of one URL bypassed it — fixed in
+`runner.py` (`fetch_calls` counter).
+
