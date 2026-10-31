@@ -59,3 +59,30 @@ jobs:
           path: |
             demo-output.txt
             e2e-record.json
+
+  demo-recording:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pull sandbox image
+        run: docker pull python:3.12-slim
+
+      - name: Install asciinema
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq asciinema
+
+      - name: Record the full demo walkthrough as .cast
+        run: |
+          python orchestrator/app.py &
+          sleep 3
+          asciinema rec --overwrite --cols 110 --rows 34 \
+            -c "bash demo/ci_walkthrough.sh" demo-recording.cast
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-recording
+          path: demo-recording.cast
