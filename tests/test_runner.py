@@ -152,5 +152,14 @@ class LocalSandboxContract(unittest.TestCase):
         sb.destroy()
 
 
+class LocalPlannerUrls(unittest.TestCase):
+    def test_trailing_punctuation_stripped(self):
+        from orchestrator import llm
+        steps = llm._local_plan(
+            "Fetch https://example.com, then https://a.io/x?q=1.")
+        urls = [s["command"] for s in steps if s["action"] == "fetch"]
+        self.assertEqual(urls, ["https://example.com", "https://a.io/x?q=1"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

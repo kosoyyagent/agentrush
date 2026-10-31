@@ -72,6 +72,7 @@ def _local_plan(task: str) -> list[dict]:
     """Deterministic planner for demos / keyless dev — no external calls."""
     steps = []
     for url in re.findall(r"https?://[^\s'\"]+", task)[:3]:
+        url = url.rstrip(".,;:!?)]}")
         steps.append({"step": len(steps) + 1, "action": "fetch",
                       "command": url, "why": "fetch referenced page"})
     steps.append({
