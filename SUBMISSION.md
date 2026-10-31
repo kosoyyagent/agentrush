@@ -47,9 +47,11 @@ inert data. Each prints exactly where the attack died.
 
 **Verified in CI, not just claimed**: every push replays the demo on a
 real Docker daemon (GitHub Actions `ubuntu-latest`). Latest run —
-all six cases contained, 13/13 unit tests green:
+all six cases contained, 13/13 unit tests green, plus an end-to-end
+task through the web API: plan → host-side fetch → sandboxed python →
+verifiable record with `sandbox_destroyed: true`:
 `github.com/kosoyyagent/agentrush/actions` (job `containment-proof`,
-run 41156566714).
+runs 41156566714, 41157393482).
 
 ## Stack
 
