@@ -6,49 +6,79 @@
 <title>AgentRush — sandboxed execution agent</title>
 <style>
   :root{color-scheme:dark}
-  body{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#ddd;background:#111}
+  body{font:15px/1.5 system-ui,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#ddd;background:#111}
+  h1{margin-bottom:4px}
+  .sub{color:#999;margin-top:0}
+  .guarantees{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .g{background:#12251a;border:1px solid #2a5a3a;border-radius:6px;padding:2px 9px;font-size:12px;color:#8fd6a4}
   textarea{width:100%;box-sizing:border-box;background:#1b1b1b;color:#ddd;border:1px solid #333;border-radius:8px;padding:10px;font:inherit}
   button{background:#3a6df0;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;cursor:pointer;margin-top:8px}
-  pre{background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:12px;overflow:auto;font-size:13px}
+  button:disabled{opacity:.5;cursor:default}
+  pre{background:#181818;border:1px solid #2a2a2a;border-radius:8px;padding:12px;overflow:auto;font-size:13px;max-height:340px}
   .step{border-left:3px solid #3a6df0;padding-left:10px;margin:12px 0}
   .killed{border-left-color:#e05555}
   .tag{display:inline-block;background:#222;border:1px solid #333;border-radius:6px;padding:1px 7px;font-size:12px;margin-right:6px}
+  .tag.ok{background:#12251a;border-color:#2a5a3a;color:#8fd6a4}
+  .tag.bad{background:#2b1515;border-color:#6b2a2a;color:#e08f8f}
+  .rec{background:#141414;border:1px solid #262626;border-radius:10px;padding:14px;margin-top:16px}
+  details{margin-top:8px}
+  summary{cursor:pointer;color:#8ab4ff;font-size:13px}
+  .status{color:#999}
 </style>
 </head>
 <body>
 <h1>AgentRush</h1>
-<p>Web agent that performs real work — every action inside a throwaway
-sandbox. Empty env, resource caps, no network from guest code, destroyed
-after the task. The run record below is the verifiable receipt.</p>
+<p class="sub">Blast Radius Zero — a web agent that performs real work with every
+action inside a throwaway sandbox on this host.</p>
+<div class="guarantees">
+  <span class="g">--network none</span>
+  <span class="g">--read-only root fs</span>
+  <span class="g">tmpfs /work (noexec,nosuid)</span>
+  <span class="g">--memory 256m · --cpus 1</span>
+  <span class="g">--pids-limit 64</span>
+  <span class="g">--cap-drop ALL</span>
+  <span class="g">no-new-privileges</span>
+  <span class="g">empty env — no secrets</span>
+  <span class="g">destroyed after task</span>
+</div>
 <textarea id="task" rows="3" placeholder="Describe the work, e.g. 'Fetch https://example.com and count how many times the word example appears'"></textarea>
 <button id="go">Run in sandbox</button>
+<span id="st" class="status"></span>
 <div id="out"></div>
 <script>
-const out=document.getElementById('out');
-document.getElementById('go').onclick=async()=>{
+const out=document.getElementById('out'),st=document.getElementById('st'),go=document.getElementById('go');
+document.getElementById('task').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))go.click();});
+go.onclick=async()=>{
   const task=document.getElementById('task').value.trim();
   if(!task)return;
-  out.innerHTML='<p>queued…</p>';
-  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task})});
-  const {job,poll}=await r.json();
-  const t=setInterval(async()=>{
-    const rr=await fetch(poll); const d=await rr.json();
-    if(d.state==='running'||d.state===undefined){out.innerHTML='<p>running…</p>';return;}
-    clearInterval(t);
-    if(d.state==='error'||!d.record){out.innerHTML='<pre>'+JSON.stringify(d,null,1)+'</pre>';return;}
-    render(d.record);
-  },1500);
+  go.disabled=true;st.textContent='queued…';out.innerHTML='';
+  try{
+    const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task})});
+    const {job,poll}=await r.json();
+    if(!poll){st.textContent=(await r.text?.())||'queue error';go.disabled=false;return;}
+    const t=setInterval(async()=>{
+      const rr=await fetch(poll); const d=await rr.json();
+      if(d.state==='running'||d.state===undefined){st.textContent='running…';return;}
+      clearInterval(t);st.textContent='';go.disabled=false;
+      if(d.state==='error'||!d.record){out.innerHTML='<pre>'+esc(JSON.stringify(d,null,1))+'</pre>';return;}
+      render(d.record);
+    },1500);
+  }catch(e){st.textContent='request failed: '+e;go.disabled=false;}
 };
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function render(rec){
-  let h=`<p><span class="tag">sandbox: ${esc(rec.sandbox)}</span><span class="tag">destroyed: ${rec.sandbox_destroyed}</span><span class="tag">record ${esc((rec.record_sha256||'').slice(0,12))}…</span></p>`;
+  let h=`<div class="rec"><p>
+    <span class="tag ok">sandbox: ${esc(rec.sandbox)}</span>
+    <span class="tag ${rec.sandbox_destroyed?'ok':'bad'}">destroyed: ${rec.sandbox_destroyed}</span>
+    <span class="tag">record sha256 ${esc((rec.record_sha256||'').slice(0,12))}…</span></p>`;
   for(const s of rec.steps||[]){
     const r=s.result||{};
     h+=`<div class="step ${r.killed?'killed':''}"><b>step ${esc(s.step)} · ${esc(s.action)}</b> — ${esc(s.why||'')}<br>`;
-    if(s.action==='fetch')h+=`<span class="tag">${r.ok?'fetched':'failed'}</span> status ${esc(r.status??'-')} · ${r.bytes??0} bytes`;
-    else h+=`<span class="tag">${r.killed?'KILLED: '+esc(r.reason):'exit '+r.exit_code}</span> ${r.wall_sec}s<pre>${esc(r.stdout||'')}${r.stderr?'\n--- stderr ---\n'+esc(r.stderr):''}</pre>`;
+    if(s.action==='fetch')h+=`<span class="tag ${r.ok?'ok':'bad'}">${r.ok?'fetched on host':'failed'}</span> status ${esc(r.status??'-')} · ${r.bytes??0} bytes → guest sees it as a data file`;
+    else h+=`<span class="tag ${r.killed?'bad':'ok'}">${r.killed?'KILLED: '+esc(r.reason):'exit '+r.exit_code}</span> ${r.wall_sec}s<pre>${esc(r.stdout||'')}${r.stderr?'\n--- stderr ---\n'+esc(r.stderr):''}</pre>`;
     h+='</div>';
   }
+  h+=`<details><summary>raw run record JSON</summary><pre>${esc(JSON.stringify(rec,null,1))}</pre></details></div>`;
   out.innerHTML=h;
 }
 </script>
