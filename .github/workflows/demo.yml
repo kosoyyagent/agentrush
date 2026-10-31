@@ -1,0 +1,37 @@
+name: demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  containment-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pull sandbox image
+        run: docker pull python:3.12-slim
+
+      - name: Unit tests
+        run: |
+          pip install pytest requests
+          python -m pytest tests/ -q
+
+      - name: Blast Radius demo in real Docker sandbox
+        run: python demo/blast_radius.py docker | tee demo-output.txt
+
+      - name: Show containment flags actually used
+        run: |
+          echo "--- docker run flags the sandbox issues ---"
+          grep -n 'docker", "run"' -A14 sandbox/docker_sandbox.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-output
+          path: demo-output.txt
