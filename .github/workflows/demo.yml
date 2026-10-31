@@ -31,7 +31,31 @@ jobs:
           echo "--- docker run flags the sandbox issues ---"
           grep -n 'docker", "run"' -A14 sandbox/docker_sandbox.py
 
+      - name: End-to-end run through the web API
+        run: |
+          python orchestrator/app.py &
+          sleep 3
+          curl -s localhost:8080/api/health
+          echo
+          JID=$(curl -s -X POST localhost:8080/api/run \
+            -H 'Content-Type: application/json' \
+            -d '{"task":"fetch https://example.com and count the words in its title tag","sandbox":"docker"}' \
+            | python -c "import json,sys;print(json.load(sys.stdin)['job'])")
+          echo "job=$JID"
+          for i in $(seq 1 30); do
+            sleep 3
+            R=$(curl -s localhost:8080/api/result/$JID)
+            STATE=$(echo "$R" | python -c "import json,sys;print(json.load(sys.stdin).get('state',''))")
+            [ "$STATE" = "done" ] || [ "$STATE" = "error" ] && break
+          done
+          echo "$R" | python -m json.tool | tee e2e-record.json
+          echo "$R" | grep -q '"sandbox_destroyed": true' \
+            && echo "E2E PASS: sandbox destroyed after task" \
+            || echo "E2E record missing destroy flag"
+
       - uses: actions/upload-artifact@v4
         with:
           name: demo-output
-          path: demo-output.txt
+          path: |
+            demo-output.txt
+            e2e-record.json
