@@ -7,24 +7,18 @@
 #   systemctl enable --now agentrush
 set -euo pipefail
 
-# --- docker ---
-if ! command -v docker >/dev/null; then
-  apt-get update -qq
-  apt-get install -y -qq docker.io python3-venv git
-fi
+# --- docker + tools ---
+apt-get update -qq
+apt-get install -y -qq docker.io python3-venv git curl
 systemctl enable --now docker
 
 # --- sandbox image (pulled once at deploy, never at run time) ---
 docker pull python:3.12-slim
 
-# --- app ---
-install -d -m755 /opt/agentrush
-# expects this script to run inside or beside the cloned repo;
-# on the VM: git clone <repo> /opt/agentrush
+# --- app: clone the public repo; works when this script is piped via curl ---
 if [ ! -f /opt/agentrush/orchestrator/app.py ]; then
-  echo ">>> clone the repo into /opt/agentrush first, or run this script from it" >&2
-  SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-  cp -r "$SRC_DIR"/{orchestrator,sandbox,web,demo} /opt/agentrush/
+  rm -rf /opt/agentrush
+  git clone --depth 1 https://github.com/kosoyyagent/agentrush.git /opt/agentrush
 fi
 
 # --- service ---
