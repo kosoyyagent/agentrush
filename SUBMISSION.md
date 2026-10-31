@@ -38,11 +38,18 @@ Docker sandbox. The blast radius is zero and we prove it on camera.
 
 ## The demo
 
-`demo/blast_radius.py` runs five containment cases live:
-`rm -rf /` against the read-only fs, an infinite loop against the
-wall-time kill, a spawn storm against `--pids-limit`, an env scrape
-against the empty environment, and an outbound connection against
-`--network none`. Each prints exactly where the attack died.
+`demo/blast_radius.py` runs six containment cases live:
+`rm -rf --no-preserve-root /` against the read-only fs, an infinite
+loop against the wall-time kill, a spawn storm against `--pids-limit`,
+an env scrape against the empty environment, an outbound connection
+against `--network none`, and a prompt-injection payload parsed as
+inert data. Each prints exactly where the attack died.
+
+**Verified in CI, not just claimed**: every push replays the demo on a
+real Docker daemon (GitHub Actions `ubuntu-latest`). Latest run —
+all six cases contained, 13/13 unit tests green:
+`github.com/kosoyyagent/agentrush/actions` (job `containment-proof`,
+run 41156566714).
 
 ## Stack
 
