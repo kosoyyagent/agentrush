@@ -38,6 +38,11 @@ Docker sandbox. The blast radius is zero and we prove it on camera.
 
 ## The demo
 
+**Video (82s):** `demo/agentrush_demo_v2.mp4` — paced walkthrough with
+title cards: health check → real task through the web API → verifiable
+record → all six containment cases, rendered from the CI asciinema
+recording. Raw 1:1 replay: `demo/agentrush_demo.mp4`.
+
 `demo/blast_radius.py` runs six containment cases live:
 `rm -rf --no-preserve-root /` against the read-only fs, an infinite
 loop against the wall-time kill, a spawn storm against `--pids-limit`,
