@@ -25,6 +25,22 @@ _results: dict[str, dict] = {}
 _MAX_RESULTS = 200      # bounded: results expire FIFO once full
 _llm = LLM()
 
+# Sandbox policy for the public API. A client can never pick "local":
+# LocalSandbox is a dev fallback, not a security boundary, and honoring a
+# client-supplied "local" would hand out host-side code execution.
+# AGENTRUSH_SANDBOX=docker pins the backend on the VM; AGENTRUSH_ALLOW_LOCAL=1
+# re-enables the dev fallback (never set in production).
+_SERVER_KIND = os.environ.get("AGENTRUSH_SANDBOX", "auto")
+_ALLOW_LOCAL = os.environ.get("AGENTRUSH_ALLOW_LOCAL") == "1"
+
+
+def _resolve_kind(requested: str) -> str:
+    if _SERVER_KIND != "auto":
+        return _SERVER_KIND            # backend pinned by the operator
+    if requested == "local" and _ALLOW_LOCAL:
+        return "local"                 # dev only, explicitly enabled
+    return "auto"                      # docker if present, else dev fallback
+
 
 def _worker():
     while True:
@@ -76,7 +92,7 @@ class H(BaseHTTPRequestHandler):
         if not task:
             return self._send(400, json.dumps({"error": "empty task"}))
         jid = os.urandom(8).hex()
-        kind = body.get("sandbox", "auto")
+        kind = _resolve_kind(str(body.get("sandbox", "auto")))
         try:
             _jobs.put_nowait((jid, task, kind))
         except queue.Full:

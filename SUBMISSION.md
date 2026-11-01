@@ -29,6 +29,9 @@ Docker sandbox. The blast radius is zero and we prove it on camera.
   page is inert text — there is no channel for it to act through.
 - **No secrets**: API keys live only on the orchestrator host
   (systemd EnvironmentFile); the guest env is empty.
+- **No client-side escape**: the web API resolves the sandbox kind
+  server-side — a request cannot pick `local`, and the dev fallback is
+  disabled unless `AGENTRUSH_ALLOW_LOCAL=1` is set by the operator.
 - **No persistence**: read-only fs + tmpfs; container is `docker rm -f`'d
   after the task, clean or crashed.
 - **No SSRF through the planner**: fetch targets are validated as

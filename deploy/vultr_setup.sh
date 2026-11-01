@@ -32,6 +32,7 @@ Requires=docker.service
 Type=simple
 WorkingDirectory=/opt/agentrush
 Environment=PORT=8080
+Environment=AGENTRUSH_SANDBOX=docker
 Environment=LLM_BASE_URL=https://api.vultrinference.com/v1
 EnvironmentFile=-/opt/agentrush/env
 ExecStart=/usr/bin/python3 /opt/agentrush/orchestrator/app.py

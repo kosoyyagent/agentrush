@@ -152,6 +152,24 @@ class LocalSandboxContract(unittest.TestCase):
         sb.destroy()
 
 
+class SandboxPolicy(unittest.TestCase):
+    """The public API must never hand out host-side execution."""
+
+    def test_client_cannot_pick_local(self):
+        from orchestrator import app
+        orig = (app._SERVER_KIND, app._ALLOW_LOCAL)
+        try:
+            app._SERVER_KIND, app._ALLOW_LOCAL = "auto", False
+            self.assertEqual(app._resolve_kind("local"), "auto")
+            app._ALLOW_LOCAL = True
+            self.assertEqual(app._resolve_kind("local"), "local")
+            app._SERVER_KIND = "docker"
+            self.assertEqual(app._resolve_kind("local"), "docker")
+            self.assertEqual(app._resolve_kind("auto"), "docker")
+        finally:
+            app._SERVER_KIND, app._ALLOW_LOCAL = orig
+
+
 class LocalPlannerUrls(unittest.TestCase):
     def test_trailing_punctuation_stripped(self):
         from orchestrator import llm
