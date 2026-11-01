@@ -20,6 +20,13 @@ def fake_dns_global(host, *a, **kw):
     return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
 
 
+def fake_dns_rebind(host, *a, **kw):
+    """Second lookup 'rebinds' to link-local — the pin must ignore it."""
+    fake_dns_rebind.calls = getattr(fake_dns_rebind, "calls", 0) + 1
+    ip = "93.184.216.34" if fake_dns_rebind.calls == 1 else "169.254.169.254"
+    return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 0))]
+
+
 class UrlValidation(unittest.TestCase):
     def setUp(self):
         self._orig = socket.getaddrinfo
@@ -29,11 +36,7 @@ class UrlValidation(unittest.TestCase):
         socket.getaddrinfo = self._orig
 
     def _ok(self, url):
-        try:
-            runner._validate_url(url)
-            return True
-        except ValueError:
-            return False
+        return runner._url_allowed(url)
 
     def test_refuses_non_http_schemes(self):
         self.assertFalse(self._ok("file:///etc/passwd"))
@@ -54,6 +57,23 @@ class UrlValidation(unittest.TestCase):
     def test_accepts_public_http(self):
         self.assertTrue(self._ok("https://example.com/page?q=1"))
         self.assertTrue(self._ok("http://example.com/"))
+
+    def test_dns_pinned_against_rebinding(self):
+        """If DNS flips answers between lookups, the socket still dials
+        the IP the policy check approved — there is only ONE lookup."""
+        socket.getaddrinfo = fake_dns_rebind
+        dialed = []
+        orig_conn = socket.create_connection
+
+        def fake_conn(addr, timeout=None, source_address=None):
+            dialed.append(addr[0])
+            raise OSError("stop")
+        socket.create_connection = fake_conn
+        try:
+            runner.host_fetch("http://example.com/")
+        finally:
+            socket.create_connection = orig_conn
+        self.assertEqual(dialed, ["93.184.216.34"])
 
 
 class FakeLlm:

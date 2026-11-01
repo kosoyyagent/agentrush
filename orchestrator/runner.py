@@ -5,68 +5,140 @@ verifiable run record.
 The fetch path is where prompt injection lives: page text is DATA fed to
 the sandbox via stdin/file, never executed. The containment demo relies on
 this boundary staying strict.
+
+SSRF defence is two-layer: (1) scheme/host/credential checks plus a
+globally-routable-only DNS filter, and (2) DNS is resolved ONCE and the
+socket connects to that address — so a host that answers differently on
+the second lookup (rebinding) cannot swap a public IP for 169.254.169.254
+between validation and connect. Every redirect hop re-runs both layers.
 """
 import hashlib
+import http.client
 import ipaddress
 import json
 import socket
+import ssl
 import time
 import urllib.parse
-import urllib.request
 
 from sandbox.base import make_sandbox
 
 UA = {"User-Agent": "agentrush/0.1 (+verifiable-execution agent)"}
 MAX_FETCH = 512 * 1024
 _REDIRECT_LIMIT = 5
+_tls = ssl.create_default_context()
 
 
-def _public_host(host: str) -> bool:
-    """Every resolved address must be globally routable — else the planner
-    could aim the fetch at cloud metadata, loopback or LAN services."""
+def _resolve_public(host: str) -> list[str]:
+    """All A/AAAA addresses, verified globally routable. Empty -> refuse."""
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError:
-        return False
-    return bool(infos) and all(
-        ipaddress.ip_address(i[4][0]).is_global for i in infos)
+        return []
+    addrs = []
+    for i in infos:
+        try:
+            ip = ipaddress.ip_address(i[4][0])
+        except ValueError:
+            continue
+        if not ip.is_global:
+            return []               # one bad answer poisons the whole name
+        addrs.append(i[4][0])
+    return addrs
 
 
 def _validate_url(url: str) -> None:
+    """Structural checks only — scheme, credentials, host present."""
     u = urllib.parse.urlsplit(url)
     if u.scheme not in ("http", "https"):
         raise ValueError("fetch scheme must be http or https")
     if u.username or u.password:
         raise ValueError("credentials in fetch URLs are refused")
-    if not u.hostname or not _public_host(u.hostname):
-        raise ValueError(f"refusing non-public host {u.hostname!r}")
+    if not u.hostname:
+        raise ValueError("missing host")
 
 
-class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
-    """Re-validate every hop — a redirect to a private address is refused."""
+def _url_allowed(url: str) -> bool:
+    """Full policy check: structural + public DNS. Used by tests and by
+    anything that wants a boolean rather than the pinned connection."""
+    try:
+        _validate_url(url)
+        u = urllib.parse.urlsplit(url)
+        return bool(_resolve_public(u.hostname))
+    except (ValueError, UnicodeError):
+        return False
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _validate_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    """HTTPSConnection that dials a pre-validated IP while keeping TLS
+    SNI and certificate verification on the real hostname — the second
+    DNS lookup (the rebinding window) never happens."""
+
+    def __init__(self, ip: str, host: str, port: int, timeout: float):
+        super().__init__(host, port, timeout=timeout, context=_tls)
+        self._pinned_ip = ip
+        self._sni_host = host
+
+    def connect(self):
+        sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(
+            sock, server_hostname=self._sni_host)
 
 
-_opener = urllib.request.build_opener(_CheckedRedirect())
+def _pinned_get(url: str, timeout: float):
+    """One GET with DNS pinned: connect to the IP we validated, keep the
+    Host header and TLS SNI on the original hostname. Rebinding between
+    resolve and connect is impossible — there is no second lookup."""
+    u = urllib.parse.urlsplit(url)
+    host = u.hostname
+    addrs = _resolve_public(host)
+    if not addrs:
+        raise ValueError(f"refusing non-public host {host!r}")
+    port = u.port or (443 if u.scheme == "https" else 80)
+    target = urllib.parse.urlunsplit(
+        ("", "", u.path or "/", u.query, "")).rstrip("/") or "/"
+
+    if u.scheme == "https":
+        conn = _PinnedHTTPS(addrs[0], host, port, timeout)
+    else:
+        conn = http.client.HTTPConnection(addrs[0], port, timeout=timeout)
+    conn.request("GET", target, headers={
+        "Host": host if u.port is None else f"{host}:{u.port}", **UA})
+    resp = conn.getresponse()
+    return conn, resp
 
 
 def host_fetch(url: str, timeout: float = 15.0) -> dict:
     """Fetch on the ORCHESTRATOR side; the sandbox itself has no network.
-    URLs come from the LLM plan (untrusted) — scheme, host and every
-    redirect hop are checked so the fetch can't be turned inward (SSRF)."""
+    URLs come from the LLM plan (untrusted) — scheme, host, resolved
+    addresses and every redirect hop are checked so the fetch can't be
+    turned inward (SSRF), and DNS is pinned per hop against rebinding."""
+    current = url
     try:
-        _validate_url(url)
-        req = urllib.request.Request(url, headers=UA)
-        with _opener.open(req, timeout=timeout) as r:
-            body = r.read(MAX_FETCH)
-        return {"ok": True, "status": r.status, "url": url,
-                "bytes": len(body), "text": body.decode("utf-8", "replace"),
-                "sha256": hashlib.sha256(body).hexdigest()}
+        for _ in range(_REDIRECT_LIMIT + 1):
+            _validate_url(current)
+            conn, resp = _pinned_get(current, timeout)
+            try:
+                if resp.status in (301, 302, 303, 307, 308) and \
+                        resp.getheader("Location"):
+                    loc = urllib.parse.urljoin(
+                        current, resp.getheader("Location"))
+                    resp.read()
+                    current = loc
+                    continue
+                body = resp.read(MAX_FETCH)
+            finally:
+                conn.close()
+            if resp.status in (301, 302, 303, 307, 308):
+                continue
+            return {"ok": True, "status": resp.status, "url": current,
+                    "bytes": len(body),
+                    "text": body.decode("utf-8", "replace"),
+                    "sha256": hashlib.sha256(body).hexdigest()}
+        return {"ok": False, "url": current, "error": "redirect limit"}
     except Exception as e:
-        return {"ok": False, "url": url, "error": str(e)[:300]}
+        return {"ok": False, "url": current, "error": str(e)[:300]}
 
 
 MAX_STEPS = 20          # the planner is untrusted — no unbounded loops
