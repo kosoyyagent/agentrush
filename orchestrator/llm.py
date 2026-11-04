@@ -52,7 +52,10 @@ class LLM:
                 "\"command\": \"<shell or python code or url>\", \"why\": \"...\"}. "
                 "Return ONLY a JSON array. Code runs in an isolated sandbox "
                 "with no network and no secrets — fetch steps run on the host "
-                "orchestrator which passes page text into the sandbox.")},
+                "orchestrator which writes each fetched page's text into the "
+                "sandbox working directory /work as page_0.txt, page_1.txt, ... "
+                "in fetch order. Python steps read them with "
+                "open('page_0.txt') or glob.glob('page_*.txt').")},
             {"role": "user", "content": task},
         ])
         start, end = out.find("["), out.rfind("]")
